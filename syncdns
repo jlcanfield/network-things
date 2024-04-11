@@ -52,6 +52,8 @@
     :global IsValidName
     /ip dhcp-server lease
     :local fqdns [:toarray ""]
+    
+    # Gather DHCP leases
     :foreach lease in [find] do={
         :local hostname [get value-name=host-name $lease]
         :if ([$IsValidName $hostname]) do={
@@ -63,6 +65,20 @@
             }
         }
     }
+    
+    # Add static IP addresses
+    /ip address
+    :foreach address in [find where dynamic=no] do={
+        :local ipaddr [get value-name=address $address]
+        :local hostname [get value-name=comment $address]
+        :if ([$IsValidName $hostname]) do={
+            :local fqdn "$hostname.$DefaultDomain"
+            :if ([:len ($fqdns->$fqdn)] = 0) do={
+                :set ($fqdns->$fqdn) $ipaddr
+            }
+        }
+    }
+    
     :return $fqdns
 }
 
@@ -75,6 +91,7 @@
 :global Update do={
     :global DnsTtl
     :global Magic
+    :global StaticMagic
     :local fqdn [:tostr $1]
     :local ipaddr [:toip $2]
     
@@ -84,8 +101,7 @@
         :return false
     }
     
-    # If a record with the same name exists, but it has a different IP address
-    # or TTL, update the existing record
+    # If a record with the same name exists, but it has a different IP address or TTL, update the existing record
     :local exists [find where name=$fqdn comment=$Magic]
     :if ([:len $exists] > 0) do={
         :log info "syncdns: update $fqdn -> $ipaddr"
@@ -93,8 +109,15 @@
         :return true
     }
     
+    # Check if the record is for a static IP address
+    :local existsStatic [find where name=$fqdn comment=$StaticMagic]
+    :if ([:len $existsStatic] > 0) do={
+        :log info "syncdns: update static $fqdn -> $ipaddr"
+        set address=$ipaddr ttl=$DnsTtl $existsStatic
+        :return true
+    }
+    
     # If no record with the same name exists at all, create a new record
-    # Note: a manually created record may exist which MUST NOT be touched
     :if ([:len [find where name=$fqdn]] = 0) do={
         :log info "syncdns: add $fqdn -> $ipaddr"
         add name=$fqdn address=$ipaddr ttl=$DnsTtl comment=$Magic
